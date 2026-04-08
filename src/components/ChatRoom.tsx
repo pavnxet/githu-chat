@@ -52,7 +52,7 @@ export function ChatRoom() {
   useEffect(() => {
     if (!username) return;
 
-    // 1. Load recent messages
+    // Load recent messages
     fetch('/api/messages/recent')
       .then(res => res.json())
       .then(async (data: RawMessage[]) => {
@@ -70,9 +70,17 @@ export function ChatRoom() {
       })
       .catch(console.error);
 
-    // 2. Connect to Pusher
-    const pusher = new Pusher(process.env.NEXT_PUBLIC_PUSHER_KEY!, {
-      cluster: process.env.NEXT_PUBLIC_PUSHER_CLUSTER!,
+    // Connect to Pusher
+    const pusherKey = process.env.NEXT_PUBLIC_PUSHER_KEY;
+    const pusherCluster = process.env.NEXT_PUBLIC_PUSHER_CLUSTER;
+    
+    if (!pusherKey || !pusherCluster) {
+      console.error('Pusher environment variables are missing. Real-time updates disabled.');
+      return;
+    }
+
+    const pusher = new Pusher(pusherKey, {
+      cluster: pusherCluster,
     });
 
     const channel = pusher.subscribe('chatroom');
@@ -97,7 +105,6 @@ export function ChatRoom() {
           }
           return prev;
         });
-        // Auto-remove after 2 seconds
         setTimeout(() => {
           setTypingUsers((prev) => prev.filter((u) => u !== data.username));
         }, 2000);
@@ -118,7 +125,6 @@ export function ChatRoom() {
       try {
         const { ciphertext, iv } = await encrypt(text);
         
-        // Send the encrypted message to our API endpoint
         await fetch('/api/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -138,10 +144,11 @@ export function ChatRoom() {
   const handleTyping = useCallback(() => {
     if (!username) return;
     
-    // Trigger typing indicator via Pusher
-    const pusher = new Pusher(process.env.NEXT_PUBLIC_PUSHER_KEY!, {
-      cluster: process.env.NEXT_PUBLIC_PUSHER_CLUSTER!,
-    });
+    const pusherKey = process.env.NEXT_PUBLIC_PUSHER_KEY;
+    const pusherCluster = process.env.NEXT_PUBLIC_PUSHER_CLUSTER;
+    if (!pusherKey || !pusherCluster) return;
+
+    const pusher = new Pusher(pusherKey, { cluster: pusherCluster });
     const channel = pusher.subscribe('chatroom');
     channel.trigger('client-typing', { username });
     pusher.disconnect();

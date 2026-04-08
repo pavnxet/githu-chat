@@ -19,11 +19,15 @@ export async function POST(req: Request) {
       createdAt: new Date().toISOString(),
     };
 
-    // 1. Save to the database
+    // Save to database
     await db.insert(messages).values(newMessage);
 
-    // 2. Broadcast to all connected clients via Pusher
-    await pusherServerClient.trigger('chatroom', 'new-message', newMessage);
+    // Broadcast via Pusher if available
+    if (pusherServerClient) {
+      await pusherServerClient.trigger('chatroom', 'new-message', newMessage);
+    } else {
+      console.warn('Pusher not configured; message not broadcasted in real-time.');
+    }
 
     return NextResponse.json({ success: true }, { status: 201 });
   } catch (error) {
