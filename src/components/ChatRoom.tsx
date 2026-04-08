@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { io, Socket } from "socket.io-client";
+import Pusher from 'pusher-js';
 import { UsernameModal } from "./UsernameModal";
 import { MessageList } from "./MessageList";
 import { ChatInput } from "./ChatInput";
@@ -25,7 +25,6 @@ export function ChatRoom() {
   const [username, setUsername] = useState<string | null>(null);
   const [messages, setMessages] = useState<DecryptedMessage[]>([]);
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
-  const [socket, setSocket] = useState<Socket | null>(null);
   const [darkMode, setDarkMode] = useState(false);
   const { encrypt, decrypt, isReady } = useEncryption(username || "");
   const { play: playNotification, muted, toggleMute } = useSound("/notification.mp3");
@@ -49,33 +48,36 @@ export function ChatRoom() {
     localStorage.setItem("darkMode", String(darkMode));
   }, [darkMode]);
 
-  // Initialize socket
+  // Load recent messages and subscribe to Pusher events
   useEffect(() => {
     if (!username) return;
 
-    const newSocket = io({
-      path: "/api/socket",
+    // 1. Load recent messages
+    fetch('/api/messages/recent')
+      .then(res => res.json())
+      .then(async (data: RawMessage[]) => {
+        const decrypted = await Promise.all(
+          data.map(async (msg) => {
+            try {
+              const decrypted = await decrypt(msg.encryptedContent, msg.iv);
+              return { ...msg, decrypted };
+            } catch {
+              return { ...msg, decrypted: "[Decryption failed]" };
+            }
+          })
+        );
+        setMessages(decrypted);
+      })
+      .catch(console.error);
+
+    // 2. Connect to Pusher
+    const pusher = new Pusher(process.env.NEXT_PUBLIC_PUSHER_KEY!, {
+      cluster: process.env.NEXT_PUBLIC_PUSHER_CLUSTER!,
     });
 
-    newSocket.on("connect", () => {
-      console.log("Socket connected");
-    });
-
-    newSocket.on("recent-messages", async (rawMessages: RawMessage[]) => {
-      const decrypted = await Promise.all(
-        rawMessages.map(async (msg) => {
-          try {
-            const decrypted = await decrypt(msg.encryptedContent, msg.iv);
-            return { ...msg, decrypted };
-          } catch {
-            return { ...msg, decrypted: "[Decryption failed]" };
-          }
-        })
-      );
-      setMessages(decrypted);
-    });
-
-    newSocket.on("new-message", async (msg: RawMessage) => {
+    const channel = pusher.subscribe('chatroom');
+    
+    channel.bind('new-message', async (msg: RawMessage) => {
       if (msg.username !== username) {
         playNotification();
       }
@@ -87,7 +89,7 @@ export function ChatRoom() {
       }
     });
 
-    newSocket.on("user-typing", (data: { username: string }) => {
+    channel.bind('client-typing', (data: { username: string }) => {
       if (data.username !== username) {
         setTypingUsers((prev) => {
           if (!prev.includes(data.username)) {
@@ -102,45 +104,48 @@ export function ChatRoom() {
       }
     });
 
-    setSocket(newSocket);
-
-    // Send user-active every 30 seconds
-    const interval = setInterval(() => {
-      if (username) {
-        newSocket.emit("user-active", { username });
-      }
-    }, 30000);
-    newSocket.emit("user-active", { username });
-
     return () => {
-      clearInterval(interval);
-      newSocket.close();
+      channel.unbind_all();
+      channel.unsubscribe();
+      pusher.disconnect();
     };
   }, [username, decrypt, playNotification]);
 
   const handleSend = useCallback(
     async (text: string) => {
-      if (!socket || !username || !isReady) return;
+      if (!username || !isReady) return;
 
       try {
         const { ciphertext, iv } = await encrypt(text);
-        socket.emit("send-message", {
-          username,
-          encryptedContent: ciphertext,
-          iv,
+        
+        // Send the encrypted message to our API endpoint
+        await fetch('/api/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username,
+            encryptedContent: ciphertext,
+            iv,
+          }),
         });
       } catch (error) {
         console.error("Failed to send message:", error);
       }
     },
-    [socket, username, isReady, encrypt]
+    [username, isReady, encrypt]
   );
 
   const handleTyping = useCallback(() => {
-    if (socket && username) {
-      socket.emit("typing", { username });
-    }
-  }, [socket, username]);
+    if (!username) return;
+    
+    // Trigger typing indicator via Pusher
+    const pusher = new Pusher(process.env.NEXT_PUBLIC_PUSHER_KEY!, {
+      cluster: process.env.NEXT_PUBLIC_PUSHER_CLUSTER!,
+    });
+    const channel = pusher.subscribe('chatroom');
+    channel.trigger('client-typing', { username });
+    pusher.disconnect();
+  }, [username]);
 
   if (!username) {
     return <UsernameModal onSetUsername={setUsername} />;

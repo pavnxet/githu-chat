@@ -1,21 +1,22 @@
 # 🔐 Secure Chatroom
 
-A public, real‑time chat application with **client‑side AES‑256‑GCM encryption**, 7‑day message retention, and automatic database keep‑alive. Deployable on Vercel with TursoDB.
+A public, real‑time chat application with **client‑side AES‑256‑GCM encryption**, 7‑day message retention, and automatic database keep‑alive. Built with Next.js, TursoDB, and Pusher for robust real-time communication.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Next.js](https://img.shields.io/badge/Next.js-15.0-black)
+![Next.js](https://img.shields.io/badge/Next.js-15.3-black)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue)
+![Pusher](https://img.shields.io/badge/Pusher-Enabled-orange)
 
 ---
 
 ## ✨ Features
 
 - **End‑to‑End Encryption (Client‑Side)** – Messages are encrypted using AES‑256‑GCM in the browser before being sent to the server. The server never sees plaintext.
-- **Real‑Time Messaging** – WebSocket (Socket.IO) delivers messages instantly to all connected users.
+- **Real‑Time Messaging** – powered by **Pusher**, delivering messages instantly to all connected users without the need for complex socket server management.
 - **7‑Day Message Expiry** – Messages older than 7 days are automatically purged via a Vercel Cron Job.
 - **Database Keep‑Alive** – A separate cron job pings the database every 5 minutes to prevent Turso's hibernation.
 - **Unique Usernames** – Each user chooses a username; it also serves as the encryption key.
-- **Online Presence & Typing Indicators** – See who is currently typing.
+- **Online Presence & Typing Indicators** – See who is currently typing in real-time.
 - **Dark Mode** – Toggle between light and dark themes.
 - **Sound Notifications** – Play a subtle sound when a new message arrives (with mute option).
 - **Responsive UI** – Built with Tailwind CSS for mobile and desktop.
@@ -29,7 +30,7 @@ A public, real‑time chat application with **client‑side AES‑256‑GCM encr
 | Framework        | Next.js 15 (App Router)             |
 | Language         | TypeScript                          |
 | Styling          | Tailwind CSS                        |
-| Real‑Time        | Socket.IO + `@socket.io/vercel`     |
+| Real‑Time        | Pusher (Serverless Friendly)        |
 | Database         | Turso (libSQL)                      |
 | ORM              | Drizzle ORM                         |
 | Encryption       | Web Crypto API (AES‑GCM‑256)        |
@@ -44,6 +45,7 @@ A public, real‑time chat application with **client‑side AES‑256‑GCM encr
 
 - Node.js 18+ and npm
 - A [Turso](https://turso.tech) account (free tier works)
+- A [Pusher](https://pusher.com) account (free tier works)
 - A [Vercel](https://vercel.com) account (optional, for deployment)
 
 ### 1. Clone the Repository
@@ -77,20 +79,36 @@ npm install
    turso db tokens create chatroom
    ```
 
-4. Copy `.env.local.example` to `.env.local` and fill in the values:
-   ```
-   TURSO_DATABASE_URL=libsql://your-db.turso.io
-   TURSO_AUTH_TOKEN=your-token
-   ```
+### 4. Set Up Pusher Channels
 
-### 4. Run Database Migrations
+1. Log in to [Pusher](https://pusher.com).
+2. Create a new "Channels" app.
+3. Choose a cluster (e.g., `mt1`).
+4. Copy your credentials from the "App Keys" tab.
+
+### 5. Configure Environment Variables
+
+Create or update `.env.local` with your credentials:
+
+```bash
+TURSO_DATABASE_URL=libsql://your-db.turso.io
+TURSO_AUTH_TOKEN=your-token
+
+# Pusher configuration
+PUSHER_APP_ID=your_pusher_app_id
+NEXT_PUBLIC_PUSHER_KEY=your_pusher_key
+PUSHER_SECRET=your_pusher_secret
+NEXT_PUBLIC_PUSHER_CLUSTER=your_pusher_cluster
+```
+
+### 6. Run Database Migrations
 
 ```bash
 npm run db:generate
 npm run db:migrate
 ```
 
-### 5. Start the Development Server
+### 7. Start the Development Server
 
 ```bash
 npm run dev
@@ -98,27 +116,21 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-### 6. Add a Notification Sound (Optional)
-
-Place a short MP3 file named `notification.mp3` in the `public/` directory.
-
 ---
 
 ## 📁 Project Structure
 
 ```
 .
-├── public/
-│   └── notification.mp3          # Sound for new messages
 ├── src/
 │   ├── app/
 │   │   ├── api/
 │   │   │   ├── cron/
 │   │   │   │   ├── cleanup/      # 7‑day message deletion
 │   │   │   │   └── keepalive/    # DB ping to prevent hibernation
-│   │   │   ├── messages/         # Store encrypted message
+│   │   │   ├── messages/         # Store and broadcast messages
 │   │   │   ├── messages/recent/  # Fetch last 50 messages
-│   │   │   └── socket/           # WebSocket server (Socket.IO)
+│   │   │   └── pusher/auth/      # Pusher authentication endpoint
 │   │   ├── globals.css
 │   │   ├── layout.tsx
 │   │   └── page.tsx
@@ -134,9 +146,9 @@ Place a short MP3 file named `notification.mp3` in the `public/` directory.
 │   ├── hooks/
 │   │   ├── useEncryption.ts
 │   │   └── useSound.ts
-│   └── lib/
-│       └── encryption.ts         # AES‑GCM crypto functions
-├── .env.local.example
+│   ├── lib/
+│   │   ├── encryption.ts         # AES‑GCM crypto functions
+│   │   └── pusher.ts             # Pusher client initialization
 ├── drizzle.config.ts
 ├── next.config.js
 ├── package.json
@@ -156,12 +168,12 @@ Place a short MP3 file named `notification.mp3` in the `public/` directory.
    For each message, a random 12‑byte Initialization Vector (IV) is generated. The plaintext is encrypted using `AES‑GCM` with the derived key and IV.
 
 3. **Transmission**  
-   The IV and ciphertext are Base64‑encoded and sent to the server together with the username.
+   The IV and ciphertext are Base64‑encoded and sent to the server. The server then broadcasts this blob to other clients via Pusher.
 
 4. **Decryption**  
    Other clients receive the message, derive the same key from the sender's username, and decrypt using the provided IV.
 
-Because the server never sees the plaintext or the key, even a database breach would only expose encrypted blobs.
+Because the server never sees the plaintext or the key, even a compromise of the database or Pusher would only expose encrypted blobs.
 
 ---
 
@@ -172,38 +184,14 @@ Because the server never sees the plaintext or the key, even a database breach w
 | Cleanup    | Daily at 00:00  | Deletes all messages older than 7 days.                                  |
 | Keep‑Alive | Every 5 minutes | Executes `SELECT 1` to prevent the Turso database from hibernating.      |
 
-Configuration is in `vercel.json`. These jobs run automatically after deployment to Vercel.
-
 ---
 
 ## 🌐 Deployment to Vercel
 
 1. Push your code to a GitHub repository.
-
 2. Import the project into Vercel.
-
-3. Add the environment variables:
-   - `TURSO_DATABASE_URL`
-   - `TURSO_AUTH_TOKEN`
-
+3. Add the environment variables (`TURSO_...` and `PUSHER_...`).
 4. Deploy.
-
-The cron jobs will begin running as soon as the production deployment is live.
-
----
-
-## 🧪 Testing Locally
-
-You can test the cron jobs locally using `vercel dev`:
-
-```bash
-npm install -g vercel
-vercel dev
-```
-
-Then visit:
-- `http://localhost:3000/api/cron/cleanup`
-- `http://localhost:3000/api/cron/keepalive`
 
 ---
 
@@ -211,17 +199,11 @@ Then visit:
 
 Contributions are welcome! Please open an issue or submit a pull request.
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
 ---
 
 ## 📄 License
 
-This project is licensed under the MIT License – see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License.
 
 ---
 
@@ -229,7 +211,7 @@ This project is licensed under the MIT License – see the [LICENSE](LICENSE) fi
 
 - [Next.js](https://nextjs.org/)
 - [Turso](https://turso.tech/)
-- [Socket.IO](https://socket.io/)
+- [Pusher](https://pusher.com/)
 - [Drizzle ORM](https://orm.drizzle.team/)
 - [Tailwind CSS](https://tailwindcss.com/)
 - [Vercel](https://vercel.com/)
